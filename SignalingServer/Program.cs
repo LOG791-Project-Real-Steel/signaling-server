@@ -5,12 +5,12 @@ using Microsoft.Extensions.Hosting;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
+using System.Collections.Generic;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-WebSocket? oculusSocket = null;
-WebSocket? robotSocket = null;
+List<WebSocket> webSockets = [];
 
 app.UseWebSockets();
 
@@ -25,46 +25,42 @@ app.Map("/signaling", async context =>
     var socket = await context.WebSockets.AcceptWebSocketAsync();
     var remoteIP = context.Connection.RemoteIpAddress?.ToString();
 
+    webSockets.Add(socket);
+
     Console.WriteLine($"WebSocket connected from {remoteIP}");
 
-    // Assign socket role
-    if (oculusSocket == null)
+    var buffer = new byte[8192];
+    try
     {
-        oculusSocket = socket;
-        Console.WriteLine("Assigned Oculus socket.");
+        while (socket.State == WebSocketState.Open)
+        {
+            var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+            if (result.MessageType == WebSocketMessageType.Close)
+            {
+                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closed", CancellationToken.None);
+                break;
+            }
+
+            var msg = new ArraySegment<byte>(buffer, 0, result.Count);
+            foreach (WebSocket ws in webSockets)
+            {
+                if (ws.State == WebSocketState.Open && ws != socket)
+                {
+                    await ws.SendAsync(msg, result.MessageType, result.EndOfMessage, CancellationToken.None);
+                }
+            }
+        }
     }
-    else if (robotSocket == null)
+    catch (Exception ex)
     {
-        robotSocket = socket;
-        Console.WriteLine("Assigned Robot socket.");
-    }
-    else
-    {
-        Console.WriteLine("Too many connections.");
+        Console.WriteLine($"Error: {ex.Message}");
         return;
     }
-
-    var buffer = new byte[8192];
-    while (socket.State == WebSocketState.Open)
+    finally
     {
-        var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-        if (result.MessageType == WebSocketMessageType.Close)
-        {
-            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closed", CancellationToken.None);
-            break;
-        }
-
-        var msg = new ArraySegment<byte>(buffer, 0, result.Count);
-        WebSocket? target = (socket == oculusSocket) ? robotSocket : oculusSocket;
-
-        if (target != null && target.State == WebSocketState.Open)
-        {
-            await target.SendAsync(msg, WebSocketMessageType.Text, true, CancellationToken.None);
-        }
+        socket.Dispose();
+        webSockets.Remove(socket);
     }
-
-    if (socket == oculusSocket) oculusSocket = null;
-    if (socket == robotSocket) robotSocket = null;
 
     Console.WriteLine("WebSocket disconnected.");
 });
