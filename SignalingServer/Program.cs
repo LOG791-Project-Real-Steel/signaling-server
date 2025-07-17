@@ -13,6 +13,9 @@ var app = builder.Build();
 List<WebSocket> webSockets = [];
 
 app.UseWebSockets();
+app.MapStaticAssets();
+
+app.MapGet("/client", () => Results.File("~/index.html", "text/html"));
 
 app.Map("/signaling", async context =>
 {
@@ -65,4 +68,4 @@ app.Map("/signaling", async context =>
     Console.WriteLine("WebSocket disconnected.");
 });
 
-app.Run("http://0.0.0.0:5000");
+app.Run("http://localhost:5000");
