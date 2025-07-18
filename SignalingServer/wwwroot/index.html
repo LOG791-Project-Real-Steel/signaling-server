@@ -79,7 +79,6 @@
         let remoteStream = null;
 
         // HTML elements
-        const webcamButton = document.getElementById('webcamButton');
         const callButton = document.getElementById('callButton');
         const callInput = document.getElementById('callInput');
         const answerButton = document.getElementById('answerButton');
@@ -99,7 +98,6 @@
         remoteVideo.srcObject = remoteStream;
 
         callButton.disabled = false;
-        webcamButton.disabled = true;
 
         // 2. Ready WebSocket for signaling
         ws.onopen = () => {
@@ -123,10 +121,10 @@
                         pc.setRemoteDescription(answerDescription);
                     }
                     break;
-                case 'candidate':
+                case 'ice':
                     console.log('Candidate!!! ', data);
-                    //const candidate = new RTCIceCandidate(data);
-                    //pc.addIceCandidate(candidate);
+                    const candidate = new RTCIceCandidate(data);
+                    pc.addIceCandidate(candidate);
                     break;
                 default:
                     console.log('What is this ??? ', data);
@@ -173,8 +171,7 @@
                     return;
 
                 offerCandidates.push(candidate);
-                const msg = { type: 'candidate', data: candidate }
-                ws.send(JSON.stringify(msg));
+                ws.send(JSON.stringify(candidate));
             };
 
             // Create offer
