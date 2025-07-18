@@ -97,28 +97,29 @@
         // 1. Setup media sources
 
         webcamButton.onclick = async () => {
-            navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((stream) => {
-                localStream = stream;
-                remoteStream = new MediaStream();
+            // localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            remoteStream = new MediaStream();
 
-                // Push tracks from local stream to peer connection
-                localStream.getTracks().forEach((track) => {
-                    pc.addTrack(track, localStream);
+            // Push tracks from local stream to peer connection
+            // localStream.getTracks().forEach((track) => {
+            //   pc.addTrack(track, localStream);
+            // });
+
+            localStream = stream;
+            remoteStream = new MediaStream();
+
+            // Pull tracks from remote stream, add to video stream
+            pc.ontrack = (event) => {
+                event.streams[0].getTracks().forEach((track) => {
+                    remoteStream.addTrack(track);
                 });
+            };
 
-                // Pull tracks from remote stream, add to video stream
-                pc.ontrack = (event) => {
-                    event.streams[0].getTracks().forEach((track) => {
-                        remoteStream.addTrack(track);
-                    });
-                };
+            webcamVideo.srcObject = localStream;
+            remoteVideo.srcObject = remoteStream;
 
-                webcamVideo.srcObject = localStream;
-                remoteVideo.srcObject = remoteStream;
-
-                callButton.disabled = false;
-                webcamButton.disabled = true;
-            });
+            callButton.disabled = false;
+            webcamButton.disabled = true;
         };
 
         // 2. Ready WebSocket for signaling
