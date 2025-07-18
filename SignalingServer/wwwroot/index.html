@@ -105,9 +105,6 @@
             //   pc.addTrack(track, localStream);
             // });
 
-            localStream = stream;
-            remoteStream = new MediaStream();
-
             // Pull tracks from remote stream, add to video stream
             pc.ontrack = (event) => {
                 event.streams[0].getTracks().forEach((track) => {
@@ -115,7 +112,7 @@
                 });
             };
 
-            webcamVideo.srcObject = localStream;
+            //webcamVideo.srcObject = localStream;
             remoteVideo.srcObject = remoteStream;
 
             callButton.disabled = false;
