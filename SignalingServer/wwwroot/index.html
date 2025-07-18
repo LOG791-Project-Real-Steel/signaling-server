@@ -97,7 +97,7 @@
         // 1. Setup media sources
 
         webcamButton.onclick = async () => {
-            navigator.mediaDevices.getUserMedia(constraints)({ video: true, audio: true }).then((stream) => {
+            navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((stream) => {
                 localStream = stream;
                 remoteStream = new MediaStream();
 
