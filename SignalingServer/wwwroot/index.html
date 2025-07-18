@@ -34,10 +34,6 @@
 <body>
     <h2>1. Start your Webcam</h2>
     <div class="videos">
-        <!--<span>
-            <h3>Local Stream</h3>
-            <video id="webcamVideo" autoplay playsinline></video>
-        </span>-->
         <span>
             <h3>Remote Stream</h3>
             <video id="remoteVideo" autoplay playsinline></video>
@@ -82,12 +78,10 @@
         const ws = new WebSocket('wss://home.adammihajlovic.ca/robot/signaling');
         ws.binaryType = 'arraybuffer'; // Set binary type to receive ArrayBuffer
 
-        let localStream = null;
         let remoteStream = null;
 
         // HTML elements
         const webcamButton = document.getElementById('webcamButton');
-        //const webcamVideo = document.getElementById('webcamVideo');
         const callButton = document.getElementById('callButton');
         const callInput = document.getElementById('callInput');
         const answerButton = document.getElementById('answerButton');
@@ -95,29 +89,19 @@
         const hangupButton = document.getElementById('hangupButton');
 
         // 1. Setup media sources
+        remoteStream = new MediaStream();
 
-        webcamButton.onclick = async () => {
-            // localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            remoteStream = new MediaStream();
-
-            // Push tracks from local stream to peer connection
-            // localStream.getTracks().forEach((track) => {
-            //   pc.addTrack(track, localStream);
-            // });
-
-            // Pull tracks from remote stream, add to video stream
-            pc.ontrack = (event) => {
-                event.streams[0].getTracks().forEach((track) => {
-                    remoteStream.addTrack(track);
-                });
-            };
-
-            //webcamVideo.srcObject = localStream;
-            remoteVideo.srcObject = remoteStream;
-
-            callButton.disabled = false;
-            webcamButton.disabled = true;
+        // Pull tracks from remote stream, add to video stream
+        pc.ontrack = (event) => {
+            event.streams[0].getTracks().forEach((track) => {
+                remoteStream.addTrack(track);
+            });
         };
+
+        remoteVideo.srcObject = remoteStream;
+
+        callButton.disabled = false;
+        webcamButton.disabled = true;
 
         // 2. Ready WebSocket for signaling
         ws.onopen = () => {
@@ -135,6 +119,7 @@
                     break;
                 case 'answer':
                     console.log('Answer!!! ', data);
+                    call.answer = data;
                     if (!pc.currentRemoteDescription) {
                         const answerDescription = new RTCSessionDescription(data);
                         pc.setRemoteDescription(answerDescription);
