@@ -15,9 +15,9 @@ List<WebSocket> webSockets = [];
 app.UseWebSockets();
 app.MapStaticAssets();
 
-app.MapGet("/client", () => Results.File("~/index.html", "text/html"));
+app.MapGet("/robot/client", () => Results.File("~/index.html", "text/html"));
 
-app.Map("/signaling", async context =>
+app.Map("/robot/signaling", async context =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
     {
