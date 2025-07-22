@@ -1,58 +1,60 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
 app.UseWebSockets();
 
-Dictionary<string, WebSocket?> clients = new()
+var clients = new Dictionary<string, WebSocket?>()
 {
-    ["robot"] = null,
-    ["oculus"] = null
+    { "robot", null },
+    { "oculus", null }
 };
 
-Queue<string> cachedRobotMessages = new();
-Queue<string> cachedOculusMessages = new();
+var messageQueue = new Dictionary<string, ConcurrentQueue<string>>()
+{
+    { "robot", new ConcurrentQueue<string>() },
+    { "oculus", new ConcurrentQueue<string>() }
+};
 
 app.Map("/robot/signaling", async context =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
     {
         context.Response.StatusCode = 400;
-        await context.Response.WriteAsync("WebSocket request expected");
+        await context.Response.WriteAsync("WebSocket requests only");
         return;
     }
 
-    var role = context.Request.Query["role"].ToString().ToLower();
+    var role = context.Request.Query["role"].ToString();
     if (role != "robot" && role != "oculus")
     {
         context.Response.StatusCode = 400;
-        await context.Response.WriteAsync("Missing or invalid ?role=robot|oculus");
+        await context.Response.WriteAsync("Missing or invalid role (must be 'robot' or 'oculus')");
         return;
     }
 
     var ws = await context.WebSockets.AcceptWebSocketAsync();
-    Console.WriteLine($"{role} connected");
     clients[role] = ws;
 
-    // Send cached messages to new peer
-    string other = role == "robot" ? "oculus" : "robot";
-    if (clients[other] is { State: WebSocketState.Open })
+    Console.WriteLine($"{role} connected from {context.Connection.RemoteIpAddress}");
+    Console.WriteLine($"Current clients: robot = {clients["robot"]?.State}, oculus = {clients["oculus"]?.State}");
+
+    // Flush queued messages if peer already connected
+    var other = role == "robot" ? "oculus" : "robot";
+    while (messageQueue[role].TryDequeue(out var msg))
     {
-        var queue = role == "robot" ? cachedOculusMessages : cachedRobotMessages;
-        while (queue.TryDequeue(out var msg))
-        {
-            await ws.SendAsync(Encoding.UTF8.GetBytes(msg), WebSocketMessageType.Text, true, CancellationToken.None);
-        }
+        Console.WriteLine($"Flushing cached message to {role}: {msg}");
+        await ws.SendAsync(Encoding.UTF8.GetBytes(msg), WebSocketMessageType.Text, true, CancellationToken.None);
     }
 
     var buffer = new byte[8192];
@@ -67,28 +69,28 @@ app.Map("/robot/signaling", async context =>
             }
 
             var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            var target = role == "robot" ? clients["oculus"] : clients["robot"];
+            Console.WriteLine($"[{role}] -> {message}");
 
-            if (target is { State: WebSocketState.Open })
+            if (clients[other] != null && clients[other]!.State == WebSocketState.Open)
             {
-                await target.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, true, CancellationToken.None);
+                await clients[other]!.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, true, CancellationToken.None);
             }
             else
             {
-                var queue = role == "robot" ? cachedRobotMessages : cachedOculusMessages;
-                queue.Enqueue(message);
+                Console.WriteLine($"Queuing message for {other}: {message}");
+                messageQueue[other].Enqueue(message);
             }
         }
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"WebSocket error: {ex.Message}");
+        Console.WriteLine($"Error in {role} WebSocket: {ex.Message}");
     }
     finally
     {
+        Console.WriteLine($"{role} disconnected.");
         clients[role] = null;
-        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disconnected", CancellationToken.None);
-        Console.WriteLine($"{role} disconnected");
+        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Bye", CancellationToken.None);
     }
 });
 
