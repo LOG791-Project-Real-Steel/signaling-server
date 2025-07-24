@@ -144,7 +144,7 @@
                         pc.setRemoteDescription(answerDescription);
                     }
                     break;
-                case 'ice':
+                case 'candidate':
                     console.log('Candidate!!! ', data);
                     const candidate = new RTCIceCandidate(data);
                     pc.addIceCandidate(candidate);
