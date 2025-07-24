@@ -129,7 +129,8 @@
 
         ws.onmessage = (event) => {
             console.log('WebSocket message received: ', event);
-            const data = JSON.parse(event.data);
+            const data = JSON.parse(event.data)
+            console.log(data)
             switch (data.type) {
                 case 'offer':
                     console.log('Offer!!! ', data);
