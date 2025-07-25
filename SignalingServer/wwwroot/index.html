@@ -124,7 +124,7 @@
             console.log('WebSocket connection established');
         };
 
-        ws.onmessage = (event) => {
+        ws.onmessage = async (event) => {
             console.log('WebSocket message received: ', event);
             const data = JSON.parse(event.data)
             switch (data.type) {
@@ -142,25 +142,26 @@
                     console.log('Offer!!! ', data);
                     call.offer = data;
                     answerButton.disabled = false;
+                    await answerStuff(pc);
                     break;
                 case 'answer':
                     console.log('Answer!!! ', data);
                     call.answer = data;
                     if (!pc.currentRemoteDescription) {
                         const answerDescription = new RTCSessionDescription(data);
-                        pc.setRemoteDescription(answerDescription);
+                        await pc.setRemoteDescription(answerDescription);
                     }
                     break;
                 case 'candidate':
                     console.log('Candidate type!!! ', data);
                     const candidate = new RTCIceCandidate(data.candidate);
-                    pc.addIceCandidate(candidate);
+                    await pc.addIceCandidate(candidate);
                     break;
                 default:
                     if (data.candidate) {
                         console.log('Candidate normal!!! ', data);
                         const candidate = new RTCIceCandidate(data);
-                        pc.addIceCandidate(candidate);
+                        await pc.addIceCandidate(candidate);
                     }
                     else {
                         console.log('What is this ??? ', data);
@@ -230,6 +231,10 @@
 
         // 4. Answer the call with the unique ID: Auto-anwser (both connected and awaiting start)
         answerButton.onclick = async () => {
+            await answerStuff(pc);
+        };
+        
+        const answerStuff = async (pc) => {
             pc.onicecandidate = (event) => {
                 const candidate = event.candidate ? event.candidate.toJSON() : undefined;
                 if (!candidate)
@@ -253,7 +258,7 @@
 
             call.answer = answer;
             ws.send(JSON.stringify(answer));
-        };
+        }
     </script>
 </body>
 </html>
