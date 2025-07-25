@@ -1,264 +1,119 @@
-﻿<!DOCTYPE html>
+﻿
+<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="/css/style.css">
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Syne+Mono&display=swap');
-
-        body {
-            font-family: 'Syne Mono', monospace;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-            text-align: center;
-            color: #2c3e50;
-            margin: 80px 10px;
-        }
-
-        video {
-            width: 40vw;
-            height: 30vw;
-            margin: 2rem;
-            background: #2c3e50;
-        }
-
-        .videos {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-    </style>
-    <title>WebRTC Demo</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebRTC Client</title>
+  <style>
+    video {
+      width: 40vw;
+      height: auto;
+      margin: 1rem;
+      background: #333;
+    }
+    .videos {
+      display: flex;
+      justify-content: center;
+    }
+  </style>
 </head>
 <body>
-    <h2>1. Start your Webcam</h2>
-    <div class="videos">
-        <span>
-            <h3>Local Stream</h3>
-            <video id="webcamVideo" autoplay playsinline></video>
-        </span>
-        <span>
-            <h3>Remote Stream</h3>
-            <video id="remoteVideo" autoplay playsinline></video>
-        </span>
-    </div>
+  <h2>1. Start Webcam</h2>
+  <div class="videos">
+    <video id="webcamVideo" autoplay playsinline muted></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
+  <button id="webcamButton">Start Webcam</button>
+  <button id="callButton" disabled>Create Call (offer)</button>
+  <button id="answerButton" disabled>Answer</button>
+  <button id="hangupButton" disabled>Hang Up</button>
 
-    <button id="webcamButton">Start webcam</button>
-    
-    <h2>2. Create a new Call</h2>
-    <button id="callButton" disabled>Create Call (offer)</button>
+  <script>
+    const pc = new RTCPeerConnection({
+        iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+    });
 
-    <h2>3. Join a Call</h2>
-    <p>Answer the call from a different browser window or device</p>
-    <button id="answerButton" disabled>Answer</button>
+    const ws = new WebSocket('ws://localhost:5000/robot/signaling2');
+    ws.onopen = () => ws.send(JSON.stringify({ role: 'client' }));
 
-    <h2>4. Hangup</h2>
-    <button id="hangupButton" disabled>Hangup</button>
+    let localStream, remoteStream, call;
 
-    <script>
-        "use strict";
+    const webcamButton = document.getElementById('webcamButton');
+    const callButton = document.getElementById('callButton');
+    const answerButton = document.getElementById('answerButton');
+    const hangupButton = document.getElementById('hangupButton');
 
-        const call = {};
-        const offerCandidates = [];
-        const answerCandidates = [];
+    webcamButton.onclick = async () => {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        remoteStream = new MediaStream();
 
-        const serversConfig = {
-            iceServers: [
-                {
-                    urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
-                },
-                {
-                    urls: ['turn:home.adammihajlovic.ca:3478'],
-                    username: 'webrtc',
-                    credential: 'R3al5t3El',
-                }
-            ],
-            iceCandidatePoolSize: 10,
-        };
+        document.getElementById('webcamVideo').srcObject = localStream;
+        document.getElementById('remoteVideo').srcObject = remoteStream;
 
-        // Global State
-        const pc = new RTCPeerConnection(serversConfig);
-        const ws = new WebSocket('wss://home.adammihajlovic.ca/robot/signaling2');
-        ws.binaryType = 'arraybuffer'; // Set binary type to receive ArrayBuffer
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        pc.ontrack = e => e.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
 
-        let localStream = null;
-        let remoteStream = null;
+        callButton.disabled = false;
+        answerButton.disabled = false;
+        webcamButton.disabled = true;
+    };
 
-        // HTML elements
-        const webcamButton = document.getElementById('webcamButton');
-        const webcamVideo = document.getElementById('webcamVideo');
-        const callButton = document.getElementById('callButton');
-        const answerButton = document.getElementById('answerButton');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const hangupButton = document.getElementById('hangupButton');
+    function preferVP8(sdp) {
+        const lines = sdp.split('\r\n');
+        const mLineIndex = lines.findIndex(l => l.startsWith('m=video'));
+        if (mLineIndex === -1) return sdp;
 
-        // 1. Setup media sources
+        const vp8Payloads = lines
+            .filter(l => l.startsWith('a=rtpmap') && l.includes('VP8'))
+            .map(l => l.split(' ')[0].split(':')[1]);
 
-        webcamButton.onclick = async () => {
-            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            remoteStream = new MediaStream();
+        if (vp8Payloads.length === 0) return sdp;
 
-            // Push tracks from local stream to peer connection
-            localStream.getTracks().forEach((track) => {
-                pc.addTrack(track, localStream);
-            });
+        const mLineParts = lines[mLineIndex].split(' ');
+        lines[mLineIndex] = [...mLineParts.slice(0, 3), ...vp8Payloads].join(' ');
 
-            // Pull tracks from remote stream, add to video stream
-            pc.ontrack = (event) => {
-                event.streams[0].getTracks().forEach((track) => {
-                    remoteStream.addTrack(track);
-                });
-            };
+        return lines.join('\r\n');
+    }
 
-            webcamVideo.srcObject = localStream;
-            remoteVideo.srcObject = remoteStream;
+    callButton.onclick = async () => {
+        const offer = await pc.createOffer();
+        const filteredSDP = preferVP8(offer.sdp);
 
-            callButton.disabled = false;
-            answerButton.disabled = false;
-            webcamButton.disabled = true;
-        };
+        const newOffer = new RTCSessionDescription({
+            type: "offer",
+            sdp: filteredSDP
+        });
 
-        // 2. Ready WebSocket for signaling
-        ws.onopen = () => {
-            console.log('WebSocket connection established');
-        };
+        await pc.setLocalDescription(newOffer);
 
-        ws.onmessage = async (event) => {
-            console.log('WebSocket message received: ', event);
-            const data = JSON.parse(event.data)
-            switch (data.type) {
-                case 'hello':
-                    console.log('Hello!!!', data);
-                    const hello = { type:'hello' };
-                    ws.send(JSON.stringify(hello));
-                    break;
-                case 'session':
-                    console.log('Session!!!', data);
-                    const session = { type: 'session', status: 'OK' }
-                    ws.send(JSON.stringify(session))
-                    break;
-                case 'offer':
-                    console.log('Offer!!! ', data);
-                    call.offer = data;
-                    answerButton.disabled = false;
-                    await answerStuff(pc);
-                    break;
-                case 'answer':
-                    console.log('Answer!!! ', data);
-                    call.answer = data;
-                    if (!pc.currentRemoteDescription) {
-                        const answerDescription = new RTCSessionDescription(data);
-                        await pc.setRemoteDescription(answerDescription);
-                    }
-                    break;
-                case 'candidate':
-                    console.log('Candidate type!!! ', data);
-                    const candidate = new RTCIceCandidate(data.data);
-                    await pc.addIceCandidate(candidate);
-                    break;
-                default:
-                    if (data.candidate) {
-                        console.log('Candidate normal!!! ', data);
-                        const candidate = new RTCIceCandidate(data);
-                        await pc.addIceCandidate(candidate);
-                    }
-                    else {
-                        console.log('What is this ??? ', data);
-                    }
-                    break;
-            }
+        ws.send(JSON.stringify({
+            to: "unity",
+            type: "offer",
+            sdp: filteredSDP
+        }));
+    };
 
-            // TODO: if description is offer send anwser setLocalDescription, setRemoteDescription to description received.
+    answerButton.onclick = async () => {
+        const desc = new RTCSessionDescription(call.offer);
+        await pc.setRemoteDescription(desc);
 
-            // Receive answer
-            // const data = event.data;
-            // if (!pc.currentRemoteDescription && data?.answer) {
-            //   const answerDescription = new RTCSessionDescription(data.answer);
-            //   pc.setRemoteDescription(answerDescription);
-            // }
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
 
-            // Receive candidate
-            // if (change.type === 'added') {
-            //   const candidate = new RTCIceCandidate(data);
-            //   pc.addIceCandidate(candidate);
-            // }
+        ws.send(JSON.stringify({
+            to: "unity",
+            type: "answer",
+            sdp: answer.sdp
+        }));
+    };
 
-            // Receive offer
-            // const data = event.data;
-            // if (!pc.currentRemoteDescription && data?.offer) {
-            //   const offerDescription = new RTCSessionDescription(data.offer);
-            //   pc.setRemoteDescription(offerDescription);
-            // }
-        };
-
-        ws.onclose = () => {
-            console.log('WebSocket connection closed');
-        };
-
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-
-        // 3. Create an offer
-        callButton.onclick = async () => {
-            // Get candidates for caller, push to array.
-            pc.onicecandidate = (event) => {
-                const candidate = event.candidate ? event.candidate.toJSON() : undefined;
-                if (!candidate)
-                    return;
-
-                offerCandidates.push(candidate);
-                ws.send(JSON.stringify(candidate));
-            };
-
-            // Create offer
-            const offerDescription = await pc.createOffer();
-            await pc.setLocalDescription(offerDescription);
-
-            console.log(`offerDesc: ` + offerDescription)
-            
-            const offer = {
-                sdp: offerDescription.sdp,
-                type: offerDescription.type,
-            };
-
-            call.offer = offer;
-            ws.send(JSON.stringify(offer));
-
-            hangupButton.disabled = false;
-        };
-
-        // 4. Answer the call with the unique ID: Auto-anwser (both connected and awaiting start)
-        answerButton.onclick = async () => {
-            await answerStuff(pc);
-        };
-        
-        const answerStuff = async (pc) => {
-            pc.onicecandidate = (event) => {
-                const candidate = event.candidate ? event.candidate.toJSON() : undefined;
-                if (!candidate)
-                    return;
-
-                answerCandidates.push(candidate);
-                const msg = { type: 'candidate', data: candidate }
-                ws.send(JSON.stringify(msg));
-            };
-
-            const offerDescription = call.offer;
-            await pc.setRemoteDescription(new RTCSessionDescription(offerDescription));
-
-            const answerDescription = await pc.createAnswer();
-            await pc.setLocalDescription(answerDescription);
-
-            const answer = {
-                type: answerDescription.type,
-                sdp: answerDescription.sdp,
-            };
-
-            call.answer = answer;
-            ws.send(JSON.stringify(answer));
-        }
-    </script>
+    ws.onmessage = async event => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'offer') call = { offer: msg };
+        else if (msg.type === 'answer') await pc.setRemoteDescription(new RTCSessionDescription(msg));
+        else if (msg.type === 'candidate') await pc.addIceCandidate(new RTCIceCandidate(msg.data));
+    };
+  </script>
 </body>
 </html>
