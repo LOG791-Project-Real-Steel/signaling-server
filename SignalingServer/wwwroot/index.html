@@ -152,13 +152,13 @@
                     }
                     break;
                 case 'candidate':
-                    console.log('Candidate!!! ', data);
-                    const candidate = new RTCIceCandidate(data);
+                    console.log('Candidate type!!! ', data);
+                    const candidate = new RTCIceCandidate(data.candidate);
                     pc.addIceCandidate(candidate);
                     break;
                 default:
                     if (data.candidate) {
-                        console.log('Candidate!!! ', data);
+                        console.log('Candidate normal!!! ', data);
                         const candidate = new RTCIceCandidate(data);
                         pc.addIceCandidate(candidate);
                     }
