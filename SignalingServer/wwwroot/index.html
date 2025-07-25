@@ -154,7 +154,7 @@
                     break;
                 case 'candidate':
                     console.log('Candidate type!!! ', data);
-                    const candidate = new RTCIceCandidate(data.candidate);
+                    const candidate = new RTCIceCandidate(data.data);
                     await pc.addIceCandidate(candidate);
                     break;
                 default:
