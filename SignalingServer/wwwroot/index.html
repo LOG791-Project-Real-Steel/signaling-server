@@ -52,7 +52,10 @@
     <button id="answerButton" disabled>Answer</button>
     <h2>4. Hangup</h2>
     <button id="hangupButton" disabled>Hangup</button>
-    
+    <h2>5. WebSocket Control</h2>
+    <button id="startWsButton">Start WebSocket</button>
+    <button id="stopWsButton">Stop WebSocket</button>
+
     <script>
         "use strict";
     
@@ -88,7 +91,12 @@
         const answerButton = document.getElementById('answerButton');
         const remoteVideo = document.getElementById('remoteVideo');
         const hangupButton = document.getElementById('hangupButton');
-    
+        const startWsButton = document.getElementById('startWsButton');
+        const stopWsButton = document.getElementById('stopWsButton');
+
+        let manualStop = false;
+        let reconnectTimeout = null;
+
         let localStream = null;
         let remoteStream = null;
     
@@ -181,16 +189,17 @@
                 ws.close();
             };
         }
-    
+
         function scheduleReconnect() {
+            if (manualStop) return;
             reconnectAttempts++;
             const delay = Math.min(reconnectAttempts * 3000, 30000);
             console.log(`Reconnecting in ${delay / 1000}s...`);
-            setTimeout(() => {
+            reconnectTimeout = setTimeout(() => {
                 initWebSocket();
             }, delay);
         }
-    
+
         function safeSend(obj) {
             const msg = JSON.stringify(obj);
             if (wsReady && ws.readyState === WebSocket.OPEN) {
@@ -228,7 +237,27 @@
         answerButton.onclick = async () => {
             await answerStuff(pc);
         };
-    
+
+        startWsButton.onclick = () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log("WebSocket already open.");
+                return;
+            }
+            manualStop = false;
+            console.log("🔌 Starting WebSocket manually...");
+            initWebSocket();
+        };
+
+        stopWsButton.onclick = () => {
+            console.log("🛑 Stopping WebSocket manually...");
+            manualStop = true;
+            reconnectAttempts = 0;
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+                ws.close();
+            }
+        };
+
         const answerStuff = async (pc) => {
             pc.onicecandidate = (event) => {
                 const candidate = event.candidate ? event.candidate.toJSON() : undefined;
