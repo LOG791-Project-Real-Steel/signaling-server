@@ -35,52 +35,109 @@
     <h2>1. Start your Webcam</h2>
     <div class="videos">
         <span>
-            <h3>Local Stream</h3>
-            <video id="webcamVideo" autoplay playsinline></video>
+          <h3>Local Stream</h3>
+          <video id="webcamVideo" autoplay playsinline></video>
         </span>
         <span>
-            <h3>Remote Stream</h3>
-            <video id="remoteVideo" autoplay playsinline></video>
+          <h3>Remote Stream</h3>
+          <video id="remoteVideo" autoplay playsinline></video>
         </span>
     </div>
-
-    <button id="webcamButton">Start webcam</button>
     
+    <button id="webcamButton">Start webcam</button>
     <h2>2. Create a new Call</h2>
     <button id="callButton" disabled>Create Call (offer)</button>
-
     <h2>3. Join a Call</h2>
     <p>Answer the call from a different browser window or device</p>
     <button id="answerButton" disabled>Answer</button>
-
     <h2>4. Hangup</h2>
     <button id="hangupButton" disabled>Hangup</button>
-
+    
     <script>
+        "use strict";
+    
+        const call = {};
+        const offerCandidates = [];
+        const answerCandidates = [];
+    
+        const serversConfig = {
+            iceServers: [
+                {
+                    urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
+                },
+                {
+                    urls: ['turn:home.adammihajlovic.ca:3478'],
+                    username: 'webrtc',
+                    credential: 'R3al5t3El',
+                }
+            ],
+            iceCandidatePoolSize: 10,
+        };
+    
+        const pc = new RTCPeerConnection(serversConfig);
+    
         let ws;
-        let reconnectInterval = 3000; // 3 seconds
+        const wsUrl = 'wss://home.adammihajlovic.ca/robot/signaling';
         let reconnectAttempts = 0;
-
-        function createWebSocket() {
-            ws = new WebSocket('wss://home.adammihajlovic.ca/robot/signaling');
-            ws.binaryType = 'arraybuffer';
-
-            ws.onopen = () => {
-                console.log('✅ WebSocket connection established');
-                reconnectAttempts = 0;
+        let wsReady = false;
+        const messageQueue = [];
+    
+        const webcamButton = document.getElementById('webcamButton');
+        const webcamVideo = document.getElementById('webcamVideo');
+        const callButton = document.getElementById('callButton');
+        const answerButton = document.getElementById('answerButton');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const hangupButton = document.getElementById('hangupButton');
+    
+        let localStream = null;
+        let remoteStream = null;
+    
+        webcamButton.onclick = async () => {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            remoteStream = new MediaStream();
+    
+            localStream.getTracks().forEach((track) => {
+                pc.addTrack(track, localStream);
+            });
+    
+            pc.ontrack = (event) => {
+                event.streams[0].getTracks().forEach((track) => {
+                    remoteStream.addTrack(track);
+                });
             };
-
+    
+            webcamVideo.srcObject = localStream;
+            remoteVideo.srcObject = remoteStream;
+    
+            callButton.disabled = false;
+            answerButton.disabled = false;
+            webcamButton.disabled = true;
+        };
+    
+        function initWebSocket() {
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+    
+            ws.onopen = () => {
+                console.log('WebSocket connection established');
+                reconnectAttempts = 0;
+                wsReady = true;
+                while (messageQueue.length > 0) {
+                    ws.send(messageQueue.shift());
+                }
+            };
+    
             ws.onmessage = async (event) => {
-                console.log('📨 WebSocket message received: ', event);
+                console.log('WebSocket message received: ', event);
                 const data = JSON.parse(event.data);
                 switch (data.type) {
                     case 'hello':
                         console.log('Hello!!!', data);
-                        ws.send(JSON.stringify({ type: 'hello' }));
+                        safeSend({ type: 'hello' });
                         break;
                     case 'session':
                         console.log('Session!!!', data);
-                        ws.send(JSON.stringify({ type: 'session', status: 'OK' }));
+                        safeSend({ type: 'session', status: 'OK' });
                         break;
                     case 'offer':
                         console.log('Offer!!! ', data);
@@ -107,34 +164,92 @@
                             const candidate = new RTCIceCandidate(data);
                             await pc.addIceCandidate(candidate);
                         } else {
-                            console.log('🤷 What is this ??? ', data);
+                            console.log('What is this ??? ', data);
                         }
+                        break;
                 }
             };
-
+    
             ws.onclose = () => {
-                console.warn('⚠️ WebSocket closed, attempting to reconnect...');
-                attemptReconnect();
+                console.log('WebSocket connection closed');
+                wsReady = false;
+                scheduleReconnect();
             };
-
-            ws.onerror = (err) => {
-                console.error('❌ WebSocket error:', err);
-                ws.close(); // Let the reconnect logic handle this
+    
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                ws.close();
             };
         }
-
-        function attemptReconnect() {
+    
+        function scheduleReconnect() {
             reconnectAttempts++;
-            const timeout = Math.min(reconnectInterval * reconnectAttempts, 30000); // cap at 30s
-            console.log(`🔁 Reconnecting in ${timeout / 1000}s...`);
+            const delay = Math.min(reconnectAttempts * 3000, 30000);
+            console.log(`Reconnecting in ${delay / 1000}s...`);
             setTimeout(() => {
-                console.log('🔌 Reconnecting now...');
-                createWebSocket();
-            }, timeout);
+                initWebSocket();
+            }, delay);
         }
-
-        // Call it the first time to start connection
-        createWebSocket();
+    
+        function safeSend(obj) {
+            const msg = JSON.stringify(obj);
+            if (wsReady && ws.readyState === WebSocket.OPEN) {
+                ws.send(msg);
+            } else {
+                console.warn('WebSocket not ready, queuing:', msg);
+                messageQueue.push(msg);
+            }
+        }
+    
+        initWebSocket();
+    
+        callButton.onclick = async () => {
+            pc.onicecandidate = (event) => {
+                const candidate = event.candidate ? event.candidate.toJSON() : undefined;
+                if (!candidate) return;
+                offerCandidates.push(candidate);
+                safeSend(candidate);
+            };
+    
+            const offerDescription = await pc.createOffer();
+            await pc.setLocalDescription(offerDescription);
+            console.log(`offerDesc: ` + offerDescription);
+    
+            const offer = {
+                sdp: offerDescription.sdp,
+                type: offerDescription.type,
+            };
+    
+            call.offer = offer;
+            safeSend(offer);
+            hangupButton.disabled = false;
+        };
+    
+        answerButton.onclick = async () => {
+            await answerStuff(pc);
+        };
+    
+        const answerStuff = async (pc) => {
+            pc.onicecandidate = (event) => {
+                const candidate = event.candidate ? event.candidate.toJSON() : undefined;
+                if (!candidate) return;
+                answerCandidates.push(candidate);
+                safeSend({ type: 'candidate', data: candidate });
+            };
+    
+            const offerDescription = call.offer;
+            await pc.setRemoteDescription(new RTCSessionDescription(offerDescription));
+            const answerDescription = await pc.createAnswer();
+            await pc.setLocalDescription(answerDescription);
+    
+            const answer = {
+                type: answerDescription.type,
+                sdp: answerDescription.sdp,
+            };
+    
+            call.answer = answer;
+            safeSend(answer);
+        };
     </script>
 </body>
 </html>
