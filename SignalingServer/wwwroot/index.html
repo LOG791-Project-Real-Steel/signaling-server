@@ -1,0 +1,284 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Syne+Mono&display=swap');
+
+        body {
+            font-family: 'Syne Mono', monospace;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-align: center;
+            color: #2c3e50;
+            margin: 80px 10px;
+        }
+
+        video {
+            width: 40vw;
+            height: 30vw;
+            margin: 2rem;
+            background: #2c3e50;
+        }
+
+        .videos {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+    <title>WebRTC Demo</title>
+</head>
+<body>
+    <h2>1. Start your Webcam</h2>
+    <div class="videos">
+        <span>
+          <h3>Local Stream</h3>
+          <video id="webcamVideo" autoplay playsinline></video>
+        </span>
+        <span>
+          <h3>Remote Stream</h3>
+          <video id="remoteVideo" autoplay playsinline></video>
+        </span>
+    </div>
+    
+    <button id="webcamButton">Start webcam</button>
+    <h2>2. Create a new Call</h2>
+    <button id="callButton" disabled>Create Call (offer)</button>
+    <h2>3. Join a Call</h2>
+    <p>Answer the call from a different browser window or device</p>
+    <button id="answerButton" disabled>Answer</button>
+    <h2>4. Hangup</h2>
+    <button id="hangupButton" disabled>Hangup</button>
+    <h2>5. WebSocket Control</h2>
+    <button id="startWsButton">Start WebSocket</button>
+    <button id="stopWsButton">Stop WebSocket</button>
+
+    <script>
+        "use strict";
+    
+        const call = {};
+        const offerCandidates = [];
+        const answerCandidates = [];
+    
+        const serversConfig = {
+            iceServers: [
+                {
+                    urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
+                },
+                {
+                    urls: ['turn:home.adammihajlovic.ca:3478'],
+                    username: 'webrtc',
+                    credential: 'R3al5t3El',
+                }
+            ],
+            iceCandidatePoolSize: 10,
+        };
+    
+        const pc = new RTCPeerConnection(serversConfig);
+    
+        let ws;
+        const wsUrl = 'wss://home.adammihajlovic.ca/robot/signaling';
+        let reconnectAttempts = 0;
+        let wsReady = false;
+        const messageQueue = [];
+    
+        const webcamButton = document.getElementById('webcamButton');
+        const webcamVideo = document.getElementById('webcamVideo');
+        const callButton = document.getElementById('callButton');
+        const answerButton = document.getElementById('answerButton');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const hangupButton = document.getElementById('hangupButton');
+        const startWsButton = document.getElementById('startWsButton');
+        const stopWsButton = document.getElementById('stopWsButton');
+
+        let manualStop = false;
+        let reconnectTimeout = null;
+
+        let localStream = null;
+        let remoteStream = null;
+    
+        webcamButton.onclick = async () => {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            remoteStream = new MediaStream();
+    
+            localStream.getTracks().forEach((track) => {
+                pc.addTrack(track, localStream);
+            });
+    
+            pc.ontrack = (event) => {
+                event.streams[0].getTracks().forEach((track) => {
+                    remoteStream.addTrack(track);
+                });
+            };
+    
+            webcamVideo.srcObject = localStream;
+            remoteVideo.srcObject = remoteStream;
+    
+            callButton.disabled = false;
+            answerButton.disabled = false;
+            webcamButton.disabled = true;
+        };
+    
+        function initWebSocket() {
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+    
+            ws.onopen = () => {
+                console.log('WebSocket connection established');
+                reconnectAttempts = 0;
+                wsReady = true;
+                while (messageQueue.length > 0) {
+                    ws.send(messageQueue.shift());
+                }
+            };
+    
+            ws.onmessage = async (event) => {
+                console.log('WebSocket message received: ', event);
+                const data = JSON.parse(event.data);
+                switch (data.type) {
+                    case 'hello':
+                        console.log('Hello!!!', data);
+                        safeSend({ type: 'hello' });
+                        break;
+                    case 'session':
+                        console.log('Session!!!', data);
+                        safeSend({ type: 'session', status: 'OK' });
+                        break;
+                    case 'offer':
+                        console.log('Offer!!! ', data);
+                        call.offer = data;
+                        answerButton.disabled = false;
+                        await answerStuff(pc);
+                        break;
+                    case 'answer':
+                        console.log('Answer!!! ', data);
+                        call.answer = data;
+                        if (!pc.currentRemoteDescription) {
+                            const answerDescription = new RTCSessionDescription(data);
+                            await pc.setRemoteDescription(answerDescription);
+                        }
+                        break;
+                    case 'candidate':
+                        console.log('Candidate type!!! ', data);
+                        const candidate = new RTCIceCandidate(data.data);
+                        await pc.addIceCandidate(candidate);
+                        break;
+                    default:
+                        if (data.candidate) {
+                            console.log('Candidate normal!!! ', data);
+                            const candidate = new RTCIceCandidate(data);
+                            await pc.addIceCandidate(candidate);
+                        } else {
+                            console.log('What is this ??? ', data);
+                        }
+                        break;
+                }
+            };
+    
+            ws.onclose = () => {
+                console.log('WebSocket connection closed');
+                wsReady = false;
+                scheduleReconnect();
+            };
+    
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                ws.close();
+            };
+        }
+
+        function scheduleReconnect() {
+            if (manualStop) return;
+            reconnectAttempts++;
+            const delay = Math.min(reconnectAttempts * 3000, 30000);
+            console.log(`Reconnecting in ${delay / 1000}s...`);
+            reconnectTimeout = setTimeout(() => {
+                initWebSocket();
+            }, delay);
+        }
+
+        function safeSend(obj) {
+            const msg = JSON.stringify(obj);
+            if (wsReady && ws.readyState === WebSocket.OPEN) {
+                ws.send(msg);
+            } else {
+                console.warn('WebSocket not ready, queuing:', msg);
+                messageQueue.push(msg);
+            }
+        }
+    
+        initWebSocket();
+    
+        callButton.onclick = async () => {
+            pc.onicecandidate = (event) => {
+                const candidate = event.candidate ? event.candidate.toJSON() : undefined;
+                if (!candidate) return;
+                offerCandidates.push(candidate);
+                safeSend(candidate);
+            };
+    
+            const offerDescription = await pc.createOffer();
+            await pc.setLocalDescription(offerDescription);
+            console.log(`offerDesc: ` + offerDescription);
+    
+            const offer = {
+                sdp: offerDescription.sdp,
+                type: offerDescription.type,
+            };
+    
+            call.offer = offer;
+            safeSend(offer);
+            hangupButton.disabled = false;
+        };
+    
+        answerButton.onclick = async () => {
+            await answerStuff(pc);
+        };
+
+        startWsButton.onclick = () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log("WebSocket already open.");
+                return;
+            }
+            manualStop = false;
+            console.log("🔌 Starting WebSocket manually...");
+            initWebSocket();
+        };
+
+        stopWsButton.onclick = () => {
+            console.log("🛑 Stopping WebSocket manually...");
+            manualStop = true;
+            reconnectAttempts = 0;
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+                ws.close();
+            }
+        };
+
+        const answerStuff = async (pc) => {
+            pc.onicecandidate = (event) => {
+                const candidate = event.candidate ? event.candidate.toJSON() : undefined;
+                if (!candidate) return;
+                answerCandidates.push(candidate);
+                safeSend({ type: 'candidate', data: candidate });
+            };
+    
+            const offerDescription = call.offer;
+            await pc.setRemoteDescription(new RTCSessionDescription(offerDescription));
+            const answerDescription = await pc.createAnswer();
+            await pc.setLocalDescription(answerDescription);
+    
+            const answer = {
+                type: answerDescription.type,
+                sdp: answerDescription.sdp,
+            };
+    
+            call.answer = answer;
+            safeSend(answer);
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,119 @@
+﻿
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebRTC Client</title>
+  <style>
+    video {
+      width: 40vw;
+      height: auto;
+      margin: 1rem;
+      background: #333;
+    }
+    .videos {
+      display: flex;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <h2>1. Start Webcam</h2>
+  <div class="videos">
+    <video id="webcamVideo" autoplay playsinline muted></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
+  <button id="webcamButton">Start Webcam</button>
+  <button id="callButton" disabled>Create Call (offer)</button>
+  <button id="answerButton" disabled>Answer</button>
+  <button id="hangupButton" disabled>Hang Up</button>
+
+  <script>
+    const pc = new RTCPeerConnection({
+        iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+    });
+
+    const ws = new WebSocket('ws://localhost:5000/robot/signaling2');
+    ws.onopen = () => ws.send(JSON.stringify({ role: 'client' }));
+
+    let localStream, remoteStream, call;
+
+    const webcamButton = document.getElementById('webcamButton');
+    const callButton = document.getElementById('callButton');
+    const answerButton = document.getElementById('answerButton');
+    const hangupButton = document.getElementById('hangupButton');
+
+    webcamButton.onclick = async () => {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        remoteStream = new MediaStream();
+
+        document.getElementById('webcamVideo').srcObject = localStream;
+        document.getElementById('remoteVideo').srcObject = remoteStream;
+
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        pc.ontrack = e => e.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+
+        callButton.disabled = false;
+        answerButton.disabled = false;
+        webcamButton.disabled = true;
+    };
+
+    function preferVP8(sdp) {
+        const lines = sdp.split('\r\n');
+        const mLineIndex = lines.findIndex(l => l.startsWith('m=video'));
+        if (mLineIndex === -1) return sdp;
+
+        const vp8Payloads = lines
+            .filter(l => l.startsWith('a=rtpmap') && l.includes('VP8'))
+            .map(l => l.split(' ')[0].split(':')[1]);
+
+        if (vp8Payloads.length === 0) return sdp;
+
+        const mLineParts = lines[mLineIndex].split(' ');
+        lines[mLineIndex] = [...mLineParts.slice(0, 3), ...vp8Payloads].join(' ');
+
+        return lines.join('\r\n');
+    }
+
+    callButton.onclick = async () => {
+        const offer = await pc.createOffer();
+        const filteredSDP = preferVP8(offer.sdp);
+
+        const newOffer = new RTCSessionDescription({
+            type: "offer",
+            sdp: filteredSDP
+        });
+
+        await pc.setLocalDescription(newOffer);
+
+        ws.send(JSON.stringify({
+            to: "unity",
+            type: "offer",
+            sdp: filteredSDP
+        }));
+    };
+
+    answerButton.onclick = async () => {
+        const desc = new RTCSessionDescription(call.offer);
+        await pc.setRemoteDescription(desc);
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({
+            to: "unity",
+            type: "answer",
+            sdp: answer.sdp
+        }));
+    };
+
+    ws.onmessage = async event => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'offer') call = { offer: msg };
+        else if (msg.type === 'answer') await pc.setRemoteDescription(new RTCSessionDescription(msg));
+        else if (msg.type === 'candidate') await pc.addIceCandidate(new RTCIceCandidate(msg.data));
+    };
+  </script>
+</body>
+</html>
